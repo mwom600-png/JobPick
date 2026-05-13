@@ -4,28 +4,29 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/context/AuthContext'
-
-function ActivityIcon({ type }) {
-  const common = { stroke: '#475569', strokeWidth: '2', fill: 'none', strokeLinecap: 'round', strokeLinejoin: 'round' }
-  if (type === 'resume') return <svg width="22" height="22" viewBox="0 0 24 24"><path d="M7 3.5H14L18 7.5V20H7V3.5Z" {...common} /><path d="M14 3.5V7.5H18" {...common} /><path d="M9.5 12H15.5M9.5 15H15.5" {...common} /></svg>
-  if (type === 'recent') return <svg width="22" height="22" viewBox="0 0 24 24"><path d="M3.5 12C5.3 8.3 8.4 6.5 12 6.5C15.6 6.5 18.7 8.3 20.5 12C18.7 15.7 15.6 17.5 12 17.5C8.4 17.5 5.3 15.7 3.5 12Z" {...common} /><circle cx="12" cy="12" r="2.8" {...common} /></svg>
-  return <svg width="22" height="22" viewBox="0 0 24 24"><rect x="4" y="4.5" width="9" height="15" rx="1.8" {...common} /><rect x="11" y="8" width="9" height="11.5" rx="1.8" {...common} /></svg>
-}
+import { getBookmarks, getRecentJobs, getResumes } from '@/lib/userStorage'
+import { updateProfile } from 'firebase/auth'
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore'
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
+import { auth, db, storage } from '@/lib/firebase'
+import { Camera, FileText, Eye, Building2, PencilLine, Trash2, UserRoundX } from 'lucide-react'
 
 const ACTIVITY_ITEMS = [
-  { href: '/mypage/resumes', icon: 'resume', label: '이력서 관리', key: 'resumes' },
-  { href: '/mypage/recent', icon: 'recent', label: '최근 본 공고', key: 'recent' },
-  { href: '/mypage/bookmarks', icon: 'bookmarks', label: '관심기업', key: 'bookmarks' },
+  { href: '/mypage/resumes', icon: FileText, label: '이력서 관리', key: 'resumes' },
+  { href: '/mypage/recent', icon: Eye, label: '최근 본 공고', key: 'recent' },
+  { href: '/mypage/bookmarks', icon: Building2, label: '관심기업', key: 'bookmarks' },
 ]
 
 export default function MyPage() {
-  const { user, isAuthenticated, mounted, logout, updateProfile } = useAuth()
+  const { user, isAuthenticated, mounted, logout, deleteAccount } = useAuth()
   const router = useRouter()
-  const fileInputRef = useRef(null)
-  const [nicknameDraft, setNicknameDraft] = useState('')
-  const [isSaving, setIsSaving] = useState(false)
-  const [isEditing, setIsEditing] = useState(false)
-  const [showWithdrawModal, setShowWithdrawModal] = useState(false)
+  const avatarInputRef = useRef(null)
+
+  const [nickname, setNickname] = useState('')
+  const [savingNickname, setSavingNickname] = useState(false)
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [withdrawStep, setWithdrawStep] = useState(0)
+  const [isEditingProfile, setIsEditingProfile] = useState(false)
 
   useEffect(() => {
     if (mounted && !isAuthenticated) {
@@ -34,13 +35,108 @@ export default function MyPage() {
   }, [mounted, isAuthenticated, router])
 
   useEffect(() => {
-    if (!mounted) return
-    setNicknameDraft(user?.name || '')
-  }, [mounted, user?.name])
+    if (user) {
+      setNickname(user.displayName || user.email?.split('@')[0] || '')
+    }
+  }, [user])
 
   const handleLogout = () => {
     logout()
     router.replace('/')
+  }
+
+  const handleSaveNickname = async () => {
+    const u = auth.currentUser
+    if (!u || !nickname.trim()) return
+    setSavingNickname(true)
+    try {
+      await updateProfile(u, { displayName: nickname.trim() })
+      await setDoc(
+        doc(db, 'users', u.uid),
+        { name: nickname.trim(), updatedAt: serverTimestamp() },
+        { merge: true }
+      )
+      alert('닉네임이 저장되었습니다.')
+    } catch (error) {
+      console.error(error)
+      alert(error.message || '저장에 실패했습니다.')
+    } finally {
+      setSavingNickname(false)
+    }
+  }
+
+  const handleAvatarSelect = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file || !user) return
+    if (!file.type.startsWith('image/')) {
+      alert('이미지 파일(JPG, PNG 등)만 업로드할 수 있습니다.')
+      e.target.value = ''
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      alert('5MB 이하 이미지를 선택해 주세요.')
+      e.target.value = ''
+      return
+    }
+
+    setUploadingPhoto(true)
+    try {
+      const storageRef = ref(storage, `avatars/${user.uid}/profile`)
+      await uploadBytes(storageRef, file)
+      const url = await getDownloadURL(storageRef)
+      await updateProfile(auth.currentUser, { photoURL: url })
+      await setDoc(
+        doc(db, 'users', user.uid),
+        { photoURL: url, updatedAt: serverTimestamp() },
+        { merge: true }
+      )
+    } catch (error) {
+      console.error(error)
+      alert(error.message || '프로필 사진 업로드에 실패했습니다.')
+    } finally {
+      setUploadingPhoto(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleRemovePhoto = async () => {
+    const u = auth.currentUser
+    if (!u || !user?.photoURL) return
+
+    setUploadingPhoto(true)
+    try {
+      try {
+        await deleteObject(ref(storage, `avatars/${user.uid}/profile`))
+      } catch {
+        /* 객체가 없을 수 있음 */
+      }
+      await updateProfile(u, { photoURL: '' })
+      await setDoc(
+        doc(db, 'users', user.uid),
+        { photoURL: '', updatedAt: serverTimestamp() },
+        { merge: true }
+      )
+    } catch (error) {
+      console.error(error)
+      alert(error.message || '사진 삭제에 실패했습니다.')
+    } finally {
+      setUploadingPhoto(false)
+    }
+  }
+
+  const handleWithdrawFinal = async () => {
+    try {
+      await deleteAccount()
+      router.replace('/')
+    } catch (error) {
+      console.error(error)
+      alert(
+        error.message ||
+          '탈퇴 처리에 실패했습니다. 보안을 위해 다시 로그인한 뒤 시도해 주세요.'
+      )
+    } finally {
+      setWithdrawStep(0)
+    }
   }
 
   if (!mounted || !isAuthenticated) {
@@ -51,203 +147,214 @@ export default function MyPage() {
     )
   }
 
-  const name = user?.name || '홍길동'
-  const email = user?.email || 'example@email.com'
-  const initial = name.charAt(0)
-  const profileImage = user?.profileImage || null
+  const displayName = user.displayName || user.email?.split('@')[0] || '회원'
+  const email = user.email || ''
+  const initial = (nickname || displayName).charAt(0)
 
-  const handleNicknameSave = async () => {
-    const next = String(nicknameDraft || '').trim()
-    if (!next) return
-    setIsSaving(true)
-    try {
-      updateProfile({ name: next })
-      setIsEditing(false)
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  const handlePickPhoto = () => {
-    fileInputRef.current?.click()
-  }
-
-  const handlePhotoChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type?.startsWith('image/')) {
-      e.target.value = ''
-      return
-    }
-
-    const reader = new FileReader()
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === 'string' ? reader.result : null
-      if (dataUrl) updateProfile({ profileImage: dataUrl })
-      e.target.value = ''
-    }
-    reader.onerror = () => {
-      e.target.value = ''
-    }
-    reader.readAsDataURL(file)
-  }
-
-  const handleRemovePhoto = () => {
-    updateProfile({ profileImage: null })
-  }
-
-  const handleWithdraw = () => {
-    setShowWithdrawModal(true)
-  }
-
-  const confirmWithdraw = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('jobpick_user')
-      localStorage.removeItem('jobpick_accounts')
-      localStorage.removeItem('jobpick_resumes')
-      localStorage.removeItem('jobpick_recent_jobs')
-      localStorage.removeItem('jobpick_bookmarks')
-    }
-    logout()
-    router.replace('/')
+  const resumes = getResumes(user?.uid || user?.id || '')
+  const recentJobs = getRecentJobs()
+  const bookmarks = getBookmarks()
+  const statsByKey = {
+    resumes: resumes.length,
+    recent: recentJobs.length,
+    bookmarks: bookmarks.length,
   }
 
   return (
-    <main className="max-w-4xl mx-auto p-4 md:p-8">
-      <h1 className="text-2xl font-bold mb-6">마이페이지</h1>
+    <main className="max-w-3xl mx-auto p-4 md:p-8 pb-24 md:pb-8">
+      <h1 className="text-2xl md:text-3xl font-bold mb-6">마이페이지</h1>
 
-      {/* 프로필 카드 */}
-      <div className="bg-blue-50 rounded-xl p-5 border border-blue-200 mb-8">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-white flex items-center justify-center text-primary text-2xl font-bold flex-shrink-0 overflow-hidden shadow-lg">
-              {profileImage ? (
-                <img src={profileImage} alt="프로필" className="w-full h-full object-cover" />
+      {/* 프로필 편집 카드 */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-5 md:p-6 shadow-sm mb-8">
+        <div className="flex flex-col md:flex-row md:items-start gap-6">
+          <div className="flex flex-col items-center md:items-start gap-3">
+            <div className="relative w-24 h-24 md:w-28 md:h-28 rounded-2xl bg-slate-100 overflow-hidden flex-shrink-0 ring-1 ring-gray-200">
+              {user.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt=""
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
               ) : (
-                initial
+                <div className="w-full h-full bg-gradient-to-br from-primary to-blue-600 flex items-center justify-center text-white text-3xl md:text-4xl font-bold">
+                  {initial}
+                </div>
+              )}
+              {uploadingPhoto && (
+                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                  <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                </div>
               )}
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-gray-800">{name} 님</h2>
-              <p className="text-xs text-gray-500">{email}</p>
-            </div>
-          </div>
 
-          <button
-            type="button"
-            onClick={() => setIsEditing((prev) => !prev)}
-            className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-xs font-medium hover:bg-gray-50 transition-colors"
-          >
-            편집
-          </button>
-        </div>
-
-        {isEditing && (
-          <div className="flex flex-col gap-3 bg-white rounded-xl p-4 border border-gray-200">
-            <div className="flex gap-2">
-              <input
-                value={nicknameDraft}
-                onChange={(e) => setNicknameDraft(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm"
-                placeholder="닉네임"
-              />
-              <button
-                type="button"
-                onClick={handleNicknameSave}
-                disabled={isSaving}
-                className="px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-60"
-              >
-                저장
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handlePhotoChange}
-              />
-              <button
-                type="button"
-                onClick={handlePickPhoto}
-                className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-sm font-medium hover:bg-gray-50 transition-colors"
-              >
-                사진 첨부
-              </button>
-              {profileImage && (
+            {isEditingProfile && (
+              <div className="flex flex-wrap gap-2 justify-center md:justify-start">
                 <button
                   type="button"
-                  onClick={handleRemovePhoto}
-                  className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-sm font-medium hover:bg-gray-50 transition-colors"
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={uploadingPhoto}
+                  className="inline-flex items-center gap-2 text-sm px-3.5 py-2 rounded-xl bg-slate-900 text-white font-medium hover:bg-slate-800 disabled:opacity-50 transition-colors"
                 >
-                  삭제
+                  <Camera className="w-4 h-4" aria-hidden />
+                  사진 업로드
                 </button>
-              )}
-            </div>
+                {user.photoURL && (
+                  <button
+                    type="button"
+                    onClick={handleRemovePhoto}
+                    disabled={uploadingPhoto}
+                    className="inline-flex items-center gap-2 text-sm px-3.5 py-2 rounded-xl bg-white text-gray-700 font-medium border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" aria-hidden />
+                    사진 삭제
+                  </button>
+                )}
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarSelect}
+                />
+              </div>
+            )}
           </div>
-        )}
+
+          <div className="flex-1 min-w-0 w-full">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{displayName}</h2>
+                <p className="text-sm md:text-base text-gray-500 break-all">{email}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEditingProfile(!isEditingProfile)}
+                className="flex items-center gap-2 text-gray-400 hover:text-primary transition-colors"
+                aria-label="프로필 편집"
+              >
+                <PencilLine className="w-5 h-5" aria-hidden />
+              </button>
+            </div>
+
+            {isEditingProfile && (
+              <div className="mt-5 flex flex-col sm:flex-row gap-2 sm:items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">닉네임</label>
+                  <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 focus-within:ring-2 focus-within:ring-primary/15 focus-within:border-primary">
+                    <PencilLine className="w-4 h-4 text-gray-400" aria-hidden />
+                    <input
+                      type="text"
+                      value={nickname}
+                      onChange={(e) => setNickname(e.target.value)}
+                      maxLength={40}
+                      className="w-full bg-transparent outline-none text-base text-gray-800"
+                      placeholder="닉네임을 입력하세요"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveNickname}
+                  disabled={savingNickname || !nickname.trim()}
+                  className="shrink-0 inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-white font-medium text-sm hover:bg-primary-dark disabled:opacity-50 transition-colors"
+                >
+                  {savingNickname ? '저장 중...' : '저장'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* 내 활동 */}
       <section className="mb-8">
-        <h3 className="text-lg font-bold mb-4">내 활동</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <h3 className="text-lg md:text-xl font-bold mb-4">내 활동</h3>
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden divide-y divide-gray-100">
           {ACTIVITY_ITEMS.map((item) => (
             <Link
               key={item.label}
               href={item.href}
-              className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 hover:border-primary hover:shadow-md transition-all"
+              className="flex items-center justify-between px-4 py-4 hover:bg-gray-50 transition-colors min-h-[52px]"
             >
-              <div className="flex flex-col items-center gap-2 text-center">
-                <span className="text-2xl text-primary"><ActivityIcon type={item.icon} /></span>
-                <span className="font-medium text-sm text-gray-800">{item.label}</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <item.icon className="w-5 h-5 text-gray-500 flex-shrink-0" aria-hidden />
+                <span className="font-medium truncate">{item.label}</span>
+                {statsByKey[item.key] > 0 && (
+                  <span className="px-2 py-0.5 bg-primary text-white text-xs font-medium rounded-full flex-shrink-0">
+                    {statsByKey[item.key]}
+                  </span>
+                )}
               </div>
+              <span className="text-gray-400 flex-shrink-0">›</span>
             </Link>
           ))}
         </div>
       </section>
 
-      {/* 계정 관리 */}
-      <section className="mb-8">
-        <h3 className="text-lg font-bold mb-4">계정 관리</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <button
-            onClick={handleLogout}
-            className="w-full py-3 rounded-xl border-2 border-red-500 bg-red-50 text-red-600 font-semibold flex items-center justify-center gap-2 hover:bg-red-100 transition-colors text-sm"
-          >
-            <span className="text-base">↪</span>
-            로그아웃
-          </button>
-          <button
-            onClick={handleWithdraw}
-            className="w-full py-3 rounded-xl border-2 border-gray-300 bg-gray-50 text-gray-600 font-semibold flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors text-sm"
-          >
-            <span className="text-base">🗑</span>
-            회원탈퇴
-          </button>
-        </div>
-      </section>
+      {/* 로그아웃 버튼 */}
+      <button
+        onClick={handleLogout}
+        className="w-full py-4 rounded-xl border-2 border-red-500 bg-red-50 text-red-600 font-semibold flex items-center justify-center gap-2 hover:bg-red-100 transition-colors"
+      >
+        <UserRoundX className="w-5 h-5" aria-hidden />
+        로그아웃
+      </button>
 
-      {/* 회원탈퇴 확인 모달 */}
-      {showWithdrawModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
-            <h3 className="text-xl font-bold mb-4">회원탈퇴</h3>
-            <p className="text-gray-600 mb-6">
-              정말로 회원탈퇴를 진행하시겠습니까? 이 작업은 되돌릴 수 없으며, 모든 데이터가 삭제됩니다.
+      <div className="mt-6 flex justify-center">
+        <button
+          type="button"
+          onClick={() => setWithdrawStep(1)}
+          className="text-xs md:text-sm text-gray-400 hover:text-red-500 underline underline-offset-2 transition-colors"
+        >
+          회원탈퇴
+        </button>
+      </div>
+
+      {withdrawStep === 1 && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+            <p className="text-base font-medium text-gray-800 mb-6 text-center">
+              정말 탈퇴하시겠습니까?
             </p>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <button
-                onClick={() => setShowWithdrawModal(false)}
-                className="flex-1 py-3 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+                type="button"
+                onClick={() => setWithdrawStep(0)}
+                className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-700 font-medium"
               >
                 취소
               </button>
               <button
-                onClick={confirmWithdraw}
-                className="flex-1 py-3 rounded-xl bg-red-500 text-white font-medium hover:bg-red-600 transition-colors"
+                type="button"
+                onClick={() => setWithdrawStep(2)}
+                className="flex-1 py-3 rounded-xl bg-primary text-white font-medium"
+              >
+                다음
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {withdrawStep === 2 && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+            <p className="text-base font-medium text-gray-800 mb-6 text-center leading-relaxed">
+              탈퇴 후 복구할 수 없습니다. 계속하시겠습니까?
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setWithdrawStep(0)}
+                className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-700 font-medium"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleWithdrawFinal}
+                className="flex-1 py-3 rounded-xl bg-red-600 text-white font-medium"
               >
                 탈퇴하기
               </button>

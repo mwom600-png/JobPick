@@ -7,7 +7,8 @@ import { INTERN_JOBS } from '@/lib/jobs'
 import { addResumes, getBookmarks, getResumes, pushRecentJob, removeResume, toggleBookmark } from '@/lib/userStorage'
 
 export default function InternPage() {
-  const { isAuthenticated, mounted } = useAuth()
+  const { user, isAuthenticated, mounted } = useAuth()
+  const resumeUserId = user?.uid || user?.id || ''
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('coaching')
   const [savedResumes, setSavedResumes] = useState([])
@@ -28,9 +29,9 @@ export default function InternPage() {
 
   useEffect(() => {
     if (!mounted) return
-    setSavedResumes(getResumes())
+    setSavedResumes(getResumes(resumeUserId))
     setBookmarkIds(getBookmarks().map((item) => item.id))
-  }, [mounted])
+  }, [mounted, resumeUserId])
 
   const attachSavedResume = (resume) => {
     setCoachingFiles((prev) => {
@@ -88,7 +89,7 @@ export default function InternPage() {
       date: dateStr,
     }))
 
-    const next = addResumes(mapped)
+    const next = addResumes(mapped, resumeUserId)
     setSavedResumes(next)
     setCoachingFiles((prev) => [...mapped, ...prev])
     if (mapped.length > 0) startCoaching(mapped[0])
@@ -96,7 +97,7 @@ export default function InternPage() {
   }
 
   const handleDeleteSavedResume = (resumeId) => {
-    const next = removeResume(resumeId)
+    const next = removeResume(resumeId, resumeUserId)
     setSavedResumes(next)
     setCoachingFiles((prev) => prev.filter((r) => r.id !== resumeId))
     if (selectedResume?.id === resumeId) {
@@ -118,7 +119,7 @@ export default function InternPage() {
 
   if (!mounted || !isAuthenticated) {
     return (
-      <main className="max-w-5xl mx-auto p-8 flex items-center justify-center min-h-[60vh]">
+      <main className="max-w-5xl mx-auto p-4 md:p-8 flex items-center justify-center min-h-[60vh]">
         <div className="animate-spin w-10 h-10 border-2 border-primary border-t-transparent rounded-full" />
       </main>
     )
@@ -153,7 +154,7 @@ export default function InternPage() {
       {activeTab === 'coaching' && (
         <section className="mb-8 bg-gradient-to-r from-blue-500/80 to-cyan-200 rounded-3xl border border-blue-400 p-4 md:p-5 text-white">
           <h2 className="text-2xl md:text-3xl font-semibold mb-1">AI 자소서 코칭</h2>
-          <p className="text-blue-50 mb-4">AI가 자기소개서를 분석하고 개선 방향을 제시해드립니다.</p>
+          <p className="text-sm md:text-base text-blue-50 mb-4">AI가 자기소개서를 분석하고 개선 방향을 제시해드립니다.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
             <button
               type="button"
@@ -245,27 +246,26 @@ export default function InternPage() {
       {activeTab === 'realtime' && (
         <section>
           <h2 className="text-2xl md:text-4xl font-bold mb-4 md:mb-5">실시간 공고</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+          <div className="space-y-4">
             {INTERN_JOBS.map((job) => (
-              <div key={job.id} className="bg-white border border-gray-200 rounded-2xl p-2 md:p-3 relative">
-                <button onClick={() => handleToggleBookmark(job)} className="absolute top-2 right-2" aria-label="북마크">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill={bookmarkIds.includes(job.id) ? '#2563eb' : '#ffffff'} xmlns="http://www.w3.org/2000/svg">
+              <div key={job.id} className="bg-white border border-gray-200 rounded-2xl p-4 md:p-5 relative">
+                <button onClick={() => handleToggleBookmark(job)} className="absolute top-5 right-5" aria-label="북마크">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill={bookmarkIds.includes(job.id) ? '#2563eb' : '#ffffff'} xmlns="http://www.w3.org/2000/svg">
                     <path
                       d="M6 3.75C6 3.33579 6.33579 3 6.75 3H17.25C17.6642 3 18 3.33579 18 3.75V21L12 16.5L6 21V3.75Z"
-                      stroke="#94a3b8"
+                      stroke={bookmarkIds.includes(job.id) ? '#2563eb' : '#94a3b8'}
                       strokeWidth="1.8"
                       strokeLinejoin="round"
                     />
                   </svg>
                 </button>
-                <p className="text-xs md:text-lg text-gray-500 mb-1">{job.company}</p>
-                <button onClick={() => goJobDetail(job)} className="text-sm md:text-xl font-semibold mb-1 text-left hover:text-primary transition-colors">
+                <p className="text-base md:text-2xl text-gray-500 mb-2">{job.company}</p>
+                <button onClick={() => goJobDetail(job)} className="text-lg md:text-3xl font-semibold mb-3 text-left hover:text-primary transition-colors">
                   {job.title}
                 </button>
-                <div className="flex gap-1 flex-wrap">
-                  <span className="text-xs px-2 py-0.5 bg-slate-100 rounded text-gray-500">{job.location}</span>
-                  <span className="text-xs px-2 py-0.5 bg-slate-100 rounded text-gray-500">{job.career}</span>
-                  <span className="text-xs px-2 py-0.5 bg-slate-100 rounded text-gray-500">{job.category}</span>
+                <div className="flex gap-2">
+                  <span className="text-xs px-2 py-1 bg-slate-100 rounded text-gray-500">{job.location}</span>
+                  <span className="text-xs px-2 py-1 bg-slate-100 rounded text-gray-500">{job.career}</span>
                 </div>
               </div>
             ))}
@@ -276,26 +276,26 @@ export default function InternPage() {
       {activeTab === 'salary' && (
         <section>
           <h2 className="text-2xl md:text-4xl font-bold mb-4 md:mb-5">신입연봉</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+          <div className="space-y-4">
             {INTERN_JOBS.map((job) => (
-              <div key={job.id} className="bg-white border border-gray-200 rounded-2xl p-2 md:p-3 flex justify-between items-center gap-3 relative">
-                <button onClick={() => handleToggleBookmark(job)} className="absolute top-2 right-2" aria-label="북마크">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill={bookmarkIds.includes(job.id) ? '#2563eb' : '#ffffff'} xmlns="http://www.w3.org/2000/svg">
+              <div key={job.id} className="bg-white border border-gray-200 rounded-2xl p-4 md:p-5 flex justify-between items-center gap-3 relative">
+                <button onClick={() => handleToggleBookmark(job)} className="absolute top-5 right-5" aria-label="북마크">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill={bookmarkIds.includes(job.id) ? '#2563eb' : '#ffffff'} xmlns="http://www.w3.org/2000/svg">
                     <path
                       d="M6 3.75C6 3.33579 6.33579 3 6.75 3H17.25C17.6642 3 18 3.33579 18 3.75V21L12 16.5L6 21V3.75Z"
-                      stroke="#94a3b8"
+                      stroke={bookmarkIds.includes(job.id) ? '#2563eb' : '#94a3b8'}
                       strokeWidth="1.8"
                       strokeLinejoin="round"
                     />
                   </svg>
                 </button>
                 <div>
-                  <p className="text-xs md:text-lg text-gray-500 mb-1">{job.company}</p>
-                  <button onClick={() => goJobDetail(job)} className="text-sm md:text-xl font-semibold text-left hover:text-primary transition-colors">
+                  <p className="text-base md:text-2xl text-gray-500 mb-1">{job.company}</p>
+                  <button onClick={() => goJobDetail(job)} className="text-lg md:text-3xl font-semibold text-left hover:text-primary transition-colors">
                     {job.title}
                   </button>
                 </div>
-                <p className="text-lg md:text-2xl font-bold text-primary whitespace-nowrap">{job.salary}</p>
+                <p className="text-2xl md:text-4xl font-bold text-primary whitespace-nowrap">{job.salary}</p>
               </div>
             ))}
           </div>

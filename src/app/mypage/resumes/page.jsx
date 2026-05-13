@@ -7,14 +7,15 @@ import { addResumes, getResumes, removeResume } from '@/lib/userStorage'
 
 export default function ResumeManagePage() {
   const router = useRouter()
-  const { isAuthenticated, mounted } = useAuth()
+  const { user, isAuthenticated, mounted } = useAuth()
+  const resumeUserId = user?.uid || user?.id || ''
   const [resumes, setResumes] = useState([])
   const fileInputRef = useRef(null)
 
   useEffect(() => {
     if (mounted && !isAuthenticated) router.replace('/login')
-    if (mounted && isAuthenticated) setResumes(getResumes())
-  }, [mounted, isAuthenticated, router])
+    if (mounted && isAuthenticated) setResumes(getResumes(resumeUserId))
+  }, [mounted, isAuthenticated, router, resumeUserId])
 
   if (!mounted || !isAuthenticated) return null
 
@@ -50,19 +51,19 @@ export default function ResumeManagePage() {
       date: dateStr,
     }))
 
-    setResumes(addResumes(mapped))
+    setResumes(addResumes(mapped, resumeUserId))
     e.target.value = ''
   }
 
   const handleDeleteResume = (resumeId) => {
-    setResumes(removeResume(resumeId))
+    setResumes(removeResume(resumeId, resumeUserId))
   }
 
   return (
-    <main className="max-w-4xl mx-auto p-4 md:p-8">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-4 md:mb-6">
-        <h1 className="text-2xl md:text-3xl font-bold">이력서 관리</h1>
-        <div className="flex flex-col sm:flex-row gap-3">
+    <main className="max-w-4xl mx-auto p-8">
+      <div className="flex items-center justify-between gap-4 mb-6">
+        <h1 className="text-3xl font-bold">이력서 관리</h1>
+        <div className="flex gap-3">
           <button
             type="button"
             onClick={handleUploadClick}
