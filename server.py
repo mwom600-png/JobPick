@@ -261,7 +261,7 @@ def normalize_matching_groups(groups):
     }
 
 
-def return_cached_result(cached_result):
+def return_cached_result(cached_result, user_id=""):
     groups = normalize_matching_groups({
         "matches": cached_result.get("matches", []),
         "topFitMatches": cached_result.get("topFitMatches", []),
@@ -272,6 +272,7 @@ def return_cached_result(cached_result):
     save_matching_result(
         db=db,
         resume_id=cached_result["resumeId"],
+        user_id=user_id or cached_result.get("userId", ""),
         matches=groups["matches"],
         top_fit_matches=groups["topFitMatches"],
         top_accessible_matches=groups["topAccessibleMatches"],
@@ -306,14 +307,23 @@ def process_resume():
         data = request.get_json(silent=True) or {}
         doc_id = data.get("docId")
         force = data.get("force", False)
+        user_id = data.get("userId", "")
 
         print("[1] 받은 docId:", doc_id)
         print("[2] force:", force)
+        print("[2-1] 받은 userId:", user_id)
 
         if not doc_id:
             return jsonify({
                 "error": "docId가 필요합니다."
             }), 400
+
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({
+                "error": "로그인이 필요합니다.",
+                "message": "로그인이 필요합니다."
+            }), 401
 
         if not force:
             print("[3] 기존 매칭 결과 조회 시도:", doc_id)
@@ -321,7 +331,7 @@ def process_resume():
 
             if cached_result:
                 print("[4] 기존 매칭 결과 있음. 재계산 안 함.")
-                return return_cached_result(cached_result)
+                return return_cached_result(cached_result, user_id)
 
         print("[5] 이력서 처리 시작")
         resume_id = process_resume_by_doc_id(doc_id)
@@ -349,6 +359,7 @@ def process_resume():
         save_matching_result(
             db=db,
             resume_id=resume_id,
+            user_id=user_id,
             matches=groups["matches"],
             top_fit_matches=groups["topFitMatches"],
             top_accessible_matches=groups["topAccessibleMatches"],
@@ -361,6 +372,7 @@ def process_resume():
         return jsonify({
             "message": "처리 완료",
             "resumeId": resume_id,
+            "userId": user_id,
             "matches": groups["topFitMatches"],
             "topFitMatches": groups["topFitMatches"],
             "topAccessibleMatches": groups["topAccessibleMatches"],
@@ -431,6 +443,7 @@ def process_one_match():
 
         doc_id = data.get("docId")
         job_id = data.get("jobId")
+        user_id = data.get("userId")
 
         if not doc_id:
             return jsonify({
@@ -441,6 +454,12 @@ def process_one_match():
             return jsonify({
                 "error": "jobId가 필요합니다."
             }), 400
+
+        if not user_id:
+            return jsonify({
+                "error": "로그인이 필요합니다.",
+                "message": "로그인이 필요합니다."
+            }), 401
 
         result = process_matching_one_by_ids(doc_id, job_id)
         result = fill_missing_company_names(db, [result])[0]

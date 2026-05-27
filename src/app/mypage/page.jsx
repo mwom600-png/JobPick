@@ -15,11 +15,13 @@ const ACTIVITY_ITEMS = [
   { href: '/mypage/resumes', icon: FileText, label: '이력서 관리', key: 'resumes' },
   { href: '/mypage/recent', icon: Eye, label: '최근 본 공고', key: 'recent' },
   { href: '/mypage/bookmarks', icon: Building2, label: '관심기업', key: 'bookmarks' },
+  { href: '/mypage/matching-history', icon: Eye, label: 'AI 매칭 기록', key: 'matching-history' },
 ]
 
 export default function MyPage() {
   const { user, isAuthenticated, mounted, logout, deleteAccount } = useAuth()
   const router = useRouter()
+  const resumeUserId = user?.uid || user?.id || ''
   const avatarInputRef = useRef(null)
 
   const [nickname, setNickname] = useState('')
@@ -151,9 +153,9 @@ export default function MyPage() {
   const email = user.email || ''
   const initial = (nickname || displayName).charAt(0)
 
-  const resumes = getResumes(user?.uid || user?.id || '')
+  const resumes = getResumes(resumeUserId)
   const recentJobs = getRecentJobs()
-  const bookmarks = getBookmarks()
+  const bookmarks = getBookmarks(resumeUserId)
   const statsByKey = {
     resumes: resumes.length,
     recent: recentJobs.length,
