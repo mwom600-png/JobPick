@@ -80,7 +80,19 @@ export function getRecentJobs() {
 
 export function pushRecentJob(job) {
   const prev = getRecentJobs()
-  const next = [job, ...prev.filter((item) => item.id !== job.id)].slice(0, 20)
+
+  const newJob = {
+    ...job,
+    viewedAt: new Date().toISOString() // ⭐ 최근 본 시간 저장
+  }
+
+  const next = [
+    newJob,
+    ...prev.filter(
+      (item) => String(item.id || item.jobId) !== String(job.id || job.jobId)
+    )
+  ].slice(0, 20)
+
   writeJson('jobpick_recent_jobs', next)
   return next
 }
