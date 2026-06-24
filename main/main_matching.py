@@ -225,6 +225,291 @@ def get_source_url(job_raw, job_posting):
     )
 
 
+# ============================================================
+# 희망 직무/조건 필터링 관련 함수
+# ============================================================
+
+def normalize_text(value):
+    """
+    문자열/리스트/딕셔너리를 검색 가능한 하나의 소문자 문자열로 변환한다.
+    """
+    if value is None:
+        return ""
+
+    if isinstance(value, list):
+        return " ".join([normalize_text(item) for item in value])
+
+    if isinstance(value, dict):
+        return " ".join([normalize_text(item) for item in value.values()])
+
+    return str(value).strip().lower()
+
+
+def normalize_list(value):
+    """
+    matchPreferences의 배열 값을 안전하게 정리한다.
+    """
+    if not value:
+        return []
+
+    if isinstance(value, list):
+        return [normalize_text(item) for item in value if normalize_text(item)]
+
+    return [normalize_text(value)]
+
+
+def get_job_filter_text(job_raw):
+    """
+    공고 원본 데이터에서 필터링에 사용할 텍스트를 최대한 넓게 모은다.
+    """
+    job_posting = job_raw.get("jobPosting", {}) or {}
+    legacy = job_raw.get("legacyJobPosting", {}) or {}
+    meta = job_raw.get("meta", {}) or {}
+
+    job = job_posting.get("job", {}) or {}
+    requirements = job_posting.get("requirements", {}) or {}
+    work_conditions = job_posting.get("workConditions", {}) or {}
+    company_info = job_posting.get("companyInfo", {}) or {}
+
+    return normalize_text([
+        job_posting.get("title"),
+        job_posting.get("companyName"),
+        job_posting.get("category"),
+        job_posting.get("responsibilities"),
+
+        job.get("department"),
+        job.get("employmentType"),
+        job.get("hiringCount"),
+
+        requirements.get("requiredSkills"),
+        requirements.get("preferredSkills"),
+        requirements.get("requiredQualifications"),
+        requirements.get("preferredQualifications"),
+        requirements.get("coreCompetencies"),
+        requirements.get("certifications"),
+        requirements.get("education"),
+        requirements.get("experience"),
+
+        work_conditions.get("location"),
+        work_conditions.get("salary"),
+
+        company_info.get("location"),
+
+        legacy.get("title"),
+        legacy.get("companyName"),
+        legacy.get("category"),
+        legacy.get("location"),
+        legacy.get("skills"),
+        legacy.get("qualifications"),
+        legacy.get("responsibilities"),
+        legacy.get("postingType"),
+        legacy.get("salary"),
+
+        meta.get("title"),
+        meta.get("companyName"),
+        meta.get("postingType"),
+
+        job_raw.get("title"),
+        job_raw.get("companyName"),
+        job_raw.get("company"),
+        job_raw.get("category"),
+        job_raw.get("location"),
+        job_raw.get("postingType"),
+        job_raw.get("employmentType"),
+        job_raw.get("salary"),
+    ])
+
+
+def matches_role(job_text, desired_roles):
+    """
+    희망 직무 조건과 공고 텍스트가 맞는지 확인한다.
+    조건이 비어 있으면 전체 통과.
+    """
+    if not desired_roles:
+        return True
+
+    role_alias_map = {
+        "프론트엔드": "frontend",
+        "프론트": "frontend",
+        "front-end": "frontend",
+        "front end": "frontend",
+
+        "백엔드": "backend",
+        "백앤드": "backend",
+        "서버": "backend",
+        "back-end": "backend",
+        "back end": "backend",
+
+        "데이터": "data",
+        "데이터분석": "data",
+        "분석": "data",
+
+        "인공지능": "ai",
+        "머신러닝": "ai",
+        "딥러닝": "ai",
+
+        "서비스기획": "planning",
+        "기획": "planning",
+
+        "마케팅": "marketing",
+
+        "행정": "admin",
+        "사무": "admin",
+        "운영": "admin",
+    }
+
+    role_keyword_map = {
+        "backend": [
+            "backend", "back-end", "백엔드", "백앤드", "서버",
+            "spring", "java", "node", "api"
+        ],
+        "frontend": [
+            "frontend", "front-end", "front end", "프론트엔드", "프론트",
+            "react", "next", "next.js", "vue", "javascript",
+            "typescript", "ui", "웹"
+        ],
+        "data": [
+            "data", "데이터", "분석", "sql", "python", "tableau",
+            "bi", "데이터분석"
+        ],
+        "ai": [
+            "ai", "인공지능", "머신러닝", "딥러닝", "ml", "llm",
+            "모델", "자연어"
+        ],
+        "planning": [
+            "planning", "기획", "서비스기획", "pm", "po", "프로덕트"
+        ],
+        "marketing": [
+            "marketing", "마케팅", "콘텐츠", "브랜딩", "광고", "sns"
+        ],
+        "admin": [
+            "admin", "행정", "사무", "운영", "총무", "문서"
+        ],
+    }
+
+    for role in desired_roles:
+        role = normalize_text(role)
+
+        # 사용자가 프론트엔드/백엔드처럼 한글로 넣어도 내부 기준값으로 변환
+        canonical_role = role_alias_map.get(role, role)
+
+        keywords = role_keyword_map.get(canonical_role, [role])
+
+        for keyword in keywords:
+            if keyword and keyword in job_text:
+                return True
+
+    return False
+
+
+def matches_location(job_text, desired_locations):
+    """
+    희망 지역 조건과 공고 텍스트가 맞는지 확인한다.
+    조건이 비어 있으면 전체 통과.
+    """
+    if not desired_locations:
+        return True
+
+    for location in desired_locations:
+        location = normalize_text(location)
+
+        if location == "전국":
+            return True
+
+        if location == "서울":
+            if "서울" in job_text or "서울특별시" in job_text:
+                return True
+
+        elif location == "경기":
+            if (
+                "경기" in job_text
+                or "경기도" in job_text
+                or "성남" in job_text
+                or "수원" in job_text
+                or "분당" in job_text
+                or "판교" in job_text
+            ):
+                return True
+
+        elif location == "인천":
+            if "인천" in job_text or "인천광역시" in job_text:
+                return True
+
+        elif location == "부산":
+            if "부산" in job_text or "부산광역시" in job_text:
+                return True
+
+        elif location == "대전":
+            if "대전" in job_text or "대전광역시" in job_text:
+                return True
+
+        elif location == "대구":
+            if "대구" in job_text or "대구광역시" in job_text:
+                return True
+
+        elif location == "광주":
+            if "광주" in job_text or "광주광역시" in job_text:
+                return True
+
+        elif location and location in job_text:
+            return True
+
+    return False
+
+
+def matches_employment_type(job_text, employment_types):
+    """
+    희망 근무형태/채용유형과 공고 텍스트가 맞는지 확인한다.
+    조건이 비어 있으면 전체 통과.
+    """
+    if not employment_types:
+        return True
+
+    for employment_type in employment_types:
+        employment_type = normalize_text(employment_type)
+
+        if employment_type == "인턴":
+            if "인턴" in job_text or "intern" in job_text:
+                return True
+
+        elif employment_type == "신입":
+            if "신입" in job_text or "주니어" in job_text:
+                return True
+
+        elif employment_type == "경력":
+            if "경력" in job_text:
+                return True
+
+        elif employment_type and employment_type in job_text:
+            return True
+
+    return False
+
+
+def is_job_matched_with_preferences(job_raw, match_preferences):
+    """
+    이력서의 matchPreferences를 기준으로 공고가 조건에 맞는지 판단한다.
+    """
+    if not isinstance(match_preferences, dict):
+        match_preferences = {}
+
+    desired_roles = normalize_list(match_preferences.get("desiredRoles"))
+    desired_locations = normalize_list(match_preferences.get("desiredLocations"))
+    employment_types = normalize_list(match_preferences.get("employmentTypes"))
+
+    job_text = get_job_filter_text(job_raw)
+
+    role_matched = matches_role(job_text, desired_roles)
+    location_matched = matches_location(job_text, desired_locations)
+    employment_matched = matches_employment_type(job_text, employment_types)
+
+    return role_matched and location_matched and employment_matched
+
+
+# ============================================================
+# 점수 및 정렬 관련 함수
+# ============================================================
+
 def get_score_value(item, keys):
     if not isinstance(item, dict):
         return 0
@@ -424,7 +709,131 @@ def build_matching_groups(results, limit=5):
     }
 
 
-def build_match_result(job_doc_id, job_raw, resume_raw, resume_for_score):
+
+# ============================================================
+# 이력서 최신 분석 결과 선택 관련 함수
+# ============================================================
+
+def has_meaningful_value(value):
+    """
+    None, 빈 dict, 빈 list, 빈 문자열은 사용 가능한 값이 아니라고 판단한다.
+    """
+    if value is None:
+        return False
+
+    if isinstance(value, dict):
+        return len(value) > 0
+
+    if isinstance(value, list):
+        return len(value) > 0
+
+    if isinstance(value, str):
+        return bool(value.strip())
+
+    return True
+
+
+def normalize_resume_analysis_payload(analysis):
+    """
+    Firestore에 저장된 분석 결과 구조를 매칭 함수가 이해할 수 있는 형태로 맞춘다.
+
+    현재 저장 구조:
+    effectiveAnalysis: {
+        resumeData: {...}
+    }
+
+    혹시 사용자가 수정하면서 resumeData 없이 바로 basicInfo, skills 등을 둔 경우도
+    기존 flatten_resume 호환을 위해 resumeData로 감싸준다.
+    """
+    if not isinstance(analysis, dict):
+        return {}
+
+    if "resumeData" in analysis:
+        return analysis
+
+    resume_data_like_keys = {
+        "basicInfo",
+        "education",
+        "experience",
+        "certifications",
+        "skills",
+        "mentionedSkills",
+        "projects",
+        "activities",
+        "languageTests",
+        "selfIntroduction",
+        "jobCategory",
+        "experienceSummary",
+        "coreCompetencies",
+        "embeddingText",
+        "rawText",
+    }
+
+    if any(key in analysis for key in resume_data_like_keys):
+        return {
+            "resumeData": analysis
+        }
+
+    return analysis
+
+
+def get_latest_resume_analysis(resume_raw):
+    """
+    항상 최신 이력서 분석 결과를 선택한다.
+
+    우선순위:
+    1. effectiveAnalysis: 사용자가 수정했으면 수정본, 아니면 원본
+    2. editedAnalysis
+    3. originalAnalysis
+    4. resume
+
+    반환:
+    - selected_analysis: 매칭에 사용할 분석 데이터
+    - analysis_meta: 저장/로그/프론트 표시용 메타데이터
+    """
+    if not isinstance(resume_raw, dict):
+        resume_raw = {}
+
+    candidates = [
+        ("effectiveAnalysis", resume_raw.get("effectiveAnalysis")),
+        ("editedAnalysis", resume_raw.get("editedAnalysis")),
+        ("originalAnalysis", resume_raw.get("originalAnalysis")),
+        ("resume", resume_raw.get("resume")),
+    ]
+
+    selected_source = "none"
+    selected_analysis = {}
+
+    for source, analysis in candidates:
+        if has_meaningful_value(analysis):
+            selected_source = source
+            selected_analysis = normalize_resume_analysis_payload(analysis)
+            break
+
+    is_analysis_edited = bool(resume_raw.get("isAnalysisEdited", False))
+    analysis_version = resume_raw.get("analysisVersion", 1)
+
+    # 사용자에게 보여줄 기준값
+    if is_analysis_edited and selected_source in ["effectiveAnalysis", "editedAnalysis"]:
+        analysis_source_label = "edited"
+    elif selected_source in ["effectiveAnalysis", "originalAnalysis", "resume"]:
+        analysis_source_label = "original"
+    else:
+        analysis_source_label = selected_source
+
+    analysis_meta = {
+        "selectedAnalysisField": selected_source,
+        "analysisSource": analysis_source_label,
+        "resumeAnalysisVersion": analysis_version,
+        "isAnalysisEdited": is_analysis_edited,
+    }
+
+    return selected_analysis, analysis_meta
+
+
+def build_match_result(job_doc_id, job_raw, resume_raw, resume_for_score, analysis_meta=None):
+    analysis_meta = analysis_meta or {}
+
     job_posting = job_raw.get("jobPosting", {}) or {}
     requirements = job_posting.get("requirements", {}) or {}
 
@@ -463,6 +872,12 @@ def build_match_result(job_doc_id, job_raw, resume_raw, resume_for_score):
         "id": job_doc_id,
         "jobId": job_doc_id,
 
+        # 어떤 이력서 분석 버전으로 계산했는지 결과에 남긴다.
+        "resumeAnalysisSource": analysis_meta.get("analysisSource", "original"),
+        "resumeAnalysisVersion": analysis_meta.get("resumeAnalysisVersion", 1),
+        "isAnalysisEdited": analysis_meta.get("isAnalysisEdited", False),
+        "selectedAnalysisField": analysis_meta.get("selectedAnalysisField", ""),
+
         "title": get_job_title(job_raw, job_posting),
         "company": company_name,
         "companyName": company_name,
@@ -482,9 +897,14 @@ def build_match_result(job_doc_id, job_raw, resume_raw, resume_for_score):
         "matchBadges": match_badges,
 
         "ruleTotal": round(result.get("rule_total", 0), 2),
+        "ruleTotalMax": result.get("rule_total_max", 25),
         "semanticTotal": round(result.get("semantic_total", 0), 2),
+        "semanticTotalMax": result.get("semantic_total_max", 50),
         "ncsTotal": ncs_total,
+        "ncsTotalMax": result.get("ncs_total_max", 25),
         "ncsDetails": ncs_details,
+        "scoringMode": result.get("scoring_mode", ""),
+        "ruleEvidenceCount": result.get("rule_evidence_count", 0),
 
         "embeddingSimilarity": round(full_sim, 4),
         "embeddingScore": round(full_score, 2),
@@ -560,7 +980,7 @@ def build_match_result(job_doc_id, job_raw, resume_raw, resume_for_score):
             },
             "ncs": {
                 "score": ncs_total,
-                "maxScore": ncs_details.get("ncs_score_max", 25),
+                "maxScore": result.get("ncs_total_max", ncs_details.get("ncs_score_max", 25)),
                 "used": ncs_details.get("ncs_used", False),
                 "category": ncs_details.get("ncs_category", ""),
                 "similarity": ncs_details.get("ncs_similarity", 0),
@@ -588,22 +1008,56 @@ def process_matching_groups_by_resume_id(resume_doc_id, limit=5):
     if not resume_snapshot.exists:
         raise Exception(f"이력서 문서가 없습니다: {resume_doc_id}")
 
-    resume_raw = resume_snapshot.to_dict()
-    resume_for_score = flatten_resume(resume_raw)
+    resume_raw = resume_snapshot.to_dict() or {}
+
+    # 핵심:
+    # 항상 effectiveAnalysis를 최우선으로 사용한다.
+    # 사용자가 분석 결과를 수정한 경우 effectiveAnalysis에는 수정본이 들어있다.
+    # 수정하지 않은 경우 effectiveAnalysis에는 원본 분석 결과가 들어있다.
+    resume_analysis, analysis_meta = get_latest_resume_analysis(resume_raw)
+
+    # 기존 flatten_resume / get_resume_embedding_text 함수가 resumes 문서 전체 구조를
+    # 기준으로 동작할 수 있으므로, 최신 분석 결과를 resume과 effectiveAnalysis에 모두 넣는다.
+    resume_raw_for_matching = {
+        **resume_raw,
+        "resume": resume_analysis,
+        "effectiveAnalysis": resume_analysis,
+    }
+
+    resume_for_score = flatten_resume(resume_raw_for_matching)
+
+    match_preferences = resume_raw.get("matchPreferences", {}) or {}
 
     job_snapshots = db.collection("job_postings").stream()
 
     results = []
+    total_job_count = 0
+    filtered_job_count = 0
+
+    print(f"[matching] 이력서 문서 ID: {resume_doc_id}")
+    print(f"[matching] 사용 분석 필드: {analysis_meta.get('selectedAnalysisField')}")
+    print(f"[matching] 분석 출처: {analysis_meta.get('analysisSource')}")
+    print(f"[matching] 분석 버전: {analysis_meta.get('resumeAnalysisVersion')}")
+    print(f"[matching] 수정 여부: {analysis_meta.get('isAnalysisEdited')}")
 
     for job_snapshot in job_snapshots:
+        total_job_count += 1
+
         job_doc_id = job_snapshot.id
-        job_raw = job_snapshot.to_dict()
+        job_raw = job_snapshot.to_dict() or {}
+
+        # 이력서에 저장된 희망 직무/지역/근무형태 조건에 맞지 않는 공고는 점수계산 전에 제외
+        if not is_job_matched_with_preferences(job_raw, match_preferences):
+            continue
+
+        filtered_job_count += 1
 
         final_result = build_match_result(
             job_doc_id=job_doc_id,
             job_raw=job_raw,
-            resume_raw=resume_raw,
+            resume_raw=resume_raw_for_matching,
             resume_for_score=resume_for_score,
+            analysis_meta=analysis_meta,
         )
 
         results.append(final_result)
@@ -613,8 +1067,24 @@ def process_matching_groups_by_resume_id(resume_doc_id, limit=5):
         reverse=True
     )
 
-    return build_matching_groups(results, limit)
+    groups = build_matching_groups(results, limit)
 
+    # 확인 및 저장용 메타 정보
+    groups["matchPreferences"] = match_preferences
+    groups["totalJobCount"] = total_job_count
+    groups["filteredJobCount"] = filtered_job_count
+
+    # 어떤 이력서 분석 결과로 계산했는지 groups에도 남긴다.
+    groups["selectedAnalysisField"] = analysis_meta.get("selectedAnalysisField")
+    groups["analysisSource"] = analysis_meta.get("analysisSource")
+    groups["resumeAnalysisVersion"] = analysis_meta.get("resumeAnalysisVersion")
+    groups["isAnalysisEdited"] = analysis_meta.get("isAnalysisEdited")
+
+    print(f"[matching] 전체 공고 수: {total_job_count}")
+    print(f"[matching] 조건 필터링 후 공고 수: {filtered_job_count}")
+    print(f"[matching] 적용된 조건: {match_preferences}")
+
+    return groups
 
 def main():
     if len(sys.argv) < 2:
@@ -623,6 +1093,13 @@ def main():
 
     resume_doc_id = sys.argv[1]
     groups = process_matching_groups_by_resume_id(resume_doc_id)
+
+    print("\n[매칭 조건]")
+    print(groups.get("matchPreferences"))
+
+    print("\n[공고 필터링 결과]")
+    print(f"전체 공고 수: {groups.get('totalJobCount')}")
+    print(f"조건 통과 공고 수: {groups.get('filteredJobCount')}")
 
     print("\n[AI 적합순 상위 5개]")
     for item in groups["topFitMatches"]:
